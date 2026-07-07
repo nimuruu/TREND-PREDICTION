@@ -26,9 +26,9 @@ def load_data(file_id):
 
 # 🔑 MASUKKAN FILE ID GOOGLE DRIVE KAMU DI SINI
 # Ambil dari link share file 'market_trends_predictions.csv' milikmu
-GOOGLE_DRIVE_FILE_ID = "MASUKKAN_ID_FILE_DRIVE_KAMU_DI_SINI"
+GOOGLE_DRIVE_FILE_ID = "https://drive.google.com/file/d/1HT5gQtlSDX5-MK3Mcx_r1etqdxRdQNcI/view?usp=drive_link"
 
-st.title("📈 Market Trends Analytics & Predictor Engine")
+st.title("Market Trends Analytics & Predictor Engine")
 st.subheader("Analisis Komparasi Tren Teknologi Real-Time via PySpark & MLlib")
 st.markdown("---")
 
