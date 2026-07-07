@@ -1,111 +1,144 @@
 import streamlit as st
 import pandas as pd
 import plotly.express as px
+import time
+import warnings
+from pytrends.request import TrendReq
+from sklearn.linear_model import LinearRegression
+import numpy as np
 
-# 1. Pengaturan Konfigurasi Halaman Dashboard
+# Sembunyikan peringatan deprecation dari pandas/pytrends
+warnings.filterwarnings("ignore", category=FutureWarning)
+
 st.set_page_config(
-    page_title="Market Trends Predictor Engine",
+    page_title="Dynamic Market Trends Predictor",
     page_icon="📈",
     layout="wide"
 )
 
-# 2. Fungsi untuk Membaca Data Raw CSV dari Google Drive secara langsung
-@st.cache_data
-def load_data(file_id):
-    # Menggunakan URL endpoint uc?export=download untuk membaca berkas .csv murni hasil upload
-    url = f"https://drive.google.com/uc?export=download&id={file_id}"
-    df = pd.DataFrame()
-    try:
-        df = pd.read_csv(url)
-        df['week_date'] = pd.to_datetime(df['week_date'])
-        df = df.sort_values('week_date')
-    except Exception as e:
-        st.error(f"Gagal memuat data dari Google Drive. Pastikan akses berkas sudah 'Anyone with the link'! Eror: {e}")
-    return df
+# Inisialisasi koneksi Google Trends
+@st.cache_resource
+def get_pytrends():
+    return TrendReq(hl='id-ID', tz=420, retries=2, backoff_factor=1)
 
-# 🔑 MASUKKAN ID BERKAS GOOGLE DRIVE KAMU DI SINI
-GOOGLE_DRIVE_FILE_ID = "1HT5gQtlSDX5-MK3Mcx_r1etqdxRdQNcI"
+pytrends = get_pytrends()
 
-st.title("📈 Market Trends Analytics & Predictor Engine")
-st.subheader("Analisis Komparasi Tren Teknologi Real-Time via PySpark & MLlib")
+st.title("📈 Dynamic Market Trends Predictor Engine")
+st.subheader("Analisis Komparasi Tren Pasar Real-Time Berbasis Machine Learning")
 st.markdown("---")
 
-# Memuat dataset
-df_trends = load_data(GOOGLE_DRIVE_FILE_ID)
+# 🎛️ PANEL KONTROL SIDEBAR
+st.sidebar.header("🎛️ Panel Kontrol Kustom")
+st.sidebar.markdown("Masukkan kata kunci apa saja untuk memprediksi trennya di Indonesia.")
 
-if not df_trends.empty:
-    # 3. Bagian Sidebar Kontrol Dashboard
-    st.sidebar.header("🎛️ Panel Kontrol Dashboard")
-    
-    available_keywords = df_trends['keyword'].unique().tolist()
-    selected_keyword = st.sidebar.selectbox(
-        "Pilih Kata Kunci untuk Dianalisis:",
-        available_keywords
-    )
-    
-    # Filter data berdasarkan keyword pilihan
-    df_filtered = df_trends[df_trends['keyword'] == selected_keyword]
-    latest_data = df_filtered.iloc[-1]
-    
-    # 4. Menampilkan Metrik Utama
-    col1, col2, col3 = st.columns(3)
-    with col1:
-        st.metric(
-            label=f"Indeks Pencarian Terakhir ({latest_data['week_date'].strftime('%d %b %Y')})", 
-            value=f"{int(latest_data['search_index'])}/100"
-        )
-    with col2:
-        st.metric(
-            label="Moving Average (4 Minggu Lalu)", 
-            value=f"{round(latest_data['moving_avg_4w'], 2)}"
-        )
-    with col3:
-        delta_prediction = round(latest_data['predicted_future_index'] - latest_data['search_index'], 2)
-        st.metric(
-            label="Prediksi Indeks (4 Minggu Kedepan)", 
-            value=f"{round(latest_data['predicted_future_index'], 2)}",
-            delta=f"{delta_prediction} poin"
+# Kolom Input Bebas untuk User
+user_input = st.sidebar.text_input("Ketik Kata Kunci Baru:", "ai agent")
+btn_cari = st.sidebar.button("🚀 Analisis & Prediksi Tren")
+
+# Fungsi untuk mengambil data langsung saat tombol diklik
+def fetch_live_data(keyword):
+    try:
+        pytrends.build_payload([keyword], cat=0, timeframe='today 12-m', geo='ID', gprop='')
+        df = pytrends.interest_over_time()
+        if not df.empty:
+            df = df.reset_index()
+            df_clean = pd.DataFrame({
+                'week_date': df['date'],
+                'search_index': df[keyword]
+            })
+            return df_clean
+        return None
+    except Exception as e:
+        st.error(f"Terjadi batasan limit dari Google. Silakan coba beberapa saat lagi atau ganti kata kunci. Eror: {e}")
+        return None
+
+# PROSES HITUNG & VISUALISASI
+if user_input:
+    with st.spinner(f"⏳ Sedang menarik data live '{user_input}' dari server Google..."):
+        df_trends = fetch_live_data(user_input)
+        
+    if df_trends is not None and not df_trends.empty:
+        # --- FEATURE ENGINEERING (Meniru Logika PySpark) ---
+        # 1. Menghitung Moving Average 4 Minggu
+        df_trends['moving_avg_4w'] = df_trends['search_index'].rolling(window=4, min_periods=1).mean()
+        
+        # 2. Membuat Fitur Angka untuk Indeks Linear Regression
+        df_trends['row_num'] = np.arange(len(df_trends))
+        
+        # Latih Model Linear Regression Ringan (Meniru MLlib)
+        X = df_trends[['row_num', 'moving_avg_4w']].values
+        y = df_trends['search_index'].values
+        
+        model = LinearRegression()
+        model.fit(X, y)
+        
+        # Prediksi 4 Minggu ke Depan
+        df_trends['predicted_future_index'] = model.predict(X)
+        # Batasi agar nilai prediksi tetap logis di skala 0-100
+        df_trends['predicted_future_index'] = df_trends['predicted_future_index'].clip(0, 100)
+        
+        # Ambil baris data terakhir untuk ditampilkan pada widget info singkat
+        latest_data = df_trends.iloc[-1]
+        
+        # 📊 MENAMPILKAN METRIK RINGKASAN
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric(
+                label=f"Indeks Pencarian Terakhir ({latest_data['week_date'].strftime('%d %b %Y')})", 
+                value=f"{int(latest_data['search_index'])}/100"
+            )
+        with col2:
+            st.metric(
+                label="Moving Average (4 Minggu Lalu)", 
+                value=f"{round(latest_data['moving_avg_4w'], 2)}"
+            )
+        with col3:
+            delta_prediction = round(latest_data['predicted_future_index'] - latest_data['search_index'], 2)
+            st.metric(
+                label="Prediksi Indeks (4 Minggu Kedepan)", 
+                value=f"{round(latest_data['predicted_future_index'], 2)}",
+                delta=f"{delta_prediction} poin"
+            )
+            
+        st.markdown(f"### 📊 Grafik Lini Masa Kata Kunci: **{user_input.upper()}**")
+        
+        # Transformasi Data untuk Grafik Multiline Plotly
+        df_melted = df_trends.melt(
+            id_vars=['week_date'], 
+            value_vars=['search_index', 'predicted_future_index'],
+            var_name='Tipe Indeks', 
+            value_name='Skala Ketertarikan'
         )
         
-    st.markdown("### 📊 Grafik Lini Masa: Tren Saat Ini vs Prediksi Masa Depan")
-    
-    # 5. Transformasi Data untuk Grafik Multiline Plotly
-    df_melted = df_filtered.melt(
-        id_vars=['week_date'], 
-        value_vars=['search_index', 'predicted_future_index'],
-        var_name='Tipe Indeks', 
-        value_name='Skala Ketertarikan'
-    )
-    
-    df_melted['Tipe Indeks'] = df_melted['Tipe Indeks'].map({
-        'search_index': 'Tren Riil Saat Ini',
-        'predicted_future_index': 'Prediksi 4 Minggu Kedepan (MLlib)'
-    })
-    
-    # Membuat Grafik Interaktif Plotly
-    fig = px.line(
-        df_melted, 
-        x='week_date', 
-        y='Skala Ketertarikan', 
-        color='Tipe Indeks',
-        labels={'week_date': 'Tanggal Mingguan', 'Skala Ketertarikan': 'Indeks Tren (0-100)'},
-        color_discrete_sequence=["#1f77b4", "#ff7f0e"]
-    )
-    
-    fig.update_layout(
-        hovermode="x unified",
-        legend=dict(orientation="h", y=1.05, x=0),
-        margin=dict(l=20, r=20, t=20, b=20)
-    )
-    
-    st.plotly_chart(fig, use_container_width=True)
-    
-    # 6. Menampilkan Tabel Data Mentah
-    with st.expander("👁️ Lihat Tabel Data Mentah Hasil Olahan PySpark"):
-        st.dataframe(
-            df_filtered[['week_date', 'keyword', 'search_index', 'moving_avg_4w', 'predicted_future_index']]
-            .sort_values('week_date', ascending=False),
-            use_container_width=True
+        df_melted['Tipe Indeks'] = df_melted['Tipe Indeks'].map({
+            'search_index': 'Tren Riil Saat Ini',
+            'predicted_future_index': 'Prediksi Masa Depan (Regression Model)'
+        })
+        
+        # Render Grafik Interaktif Plotly
+        fig = px.line(
+            df_melted, 
+            x='week_date', 
+            y='Skala Ketertarikan', 
+            color='Tipe Indeks',
+            labels={'week_date': 'Tanggal Mingguan', 'Skala Ketertarikan': 'Indeks Tren (0-100)'},
+            color_discrete_sequence=["#1f77b4", "#ff7f0e"]
         )
-else:
-    st.info("Silakan konfigurasi 'GOOGLE_DRIVE_FILE_ID' dengan benar untuk menampilkan visualisasi grafik.")
+        
+        fig.update_layout(
+            hovermode="x unified",
+            legend=dict(orientation="h", y=1.05, x=0),
+            margin=dict(l=20, r=20, t=20, b=20)
+        )
+        
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Menampilkan Tabel Data Mentah
+        with st.expander("👁️ Lihat Tabel Data Analitik"):
+            st.dataframe(
+                df_trends[['week_date', 'search_index', 'moving_avg_4w', 'predicted_future_index']]
+                .sort_values('week_date', ascending=False),
+                use_container_width=True
+            )
+    else:
+        st.warning("Data tidak ditemukan atau Google membatasi koneksi. Coba ketik kata kunci lain yang lebih umum.")
